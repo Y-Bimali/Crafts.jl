@@ -158,6 +158,25 @@ particles leaves a single free one and the product ansatz is then no ansatz at a
 struct MeanField <: EntropySolver end
 
 """
+    MeanFieldPlus()
+
+Entropy solver that treats the tree-like part of a structure the way [`TreeLike`](@ref) does and the
+rest the way [`MeanField`](@ref) does.
+
+Repeatedly deleting particles of degree one leaves the *2-core*, the subgraph carrying every cycle.
+What the pruning removes is a forest of branches hanging off that core, and a forest of bonds is
+exactly what `TreeLike` gets right, so every bond it removes is charged one bond volume. The core is
+where the cycles are, and `TreeLike` has nothing to say about those, so it is handed to `MeanField`.
+
+The bonds removed are counted, not the particles: pruning a tree of `n` particles removes all `n` of
+them but only `n - 1` bonds, and it is the bonds that carry the volumes.
+
+Reduces to `TreeLike` on a tree, whose core is empty, and to `MeanField` on a structure that is its
+own core. In between it is neither, and unlike `MeanField` it is not variational.
+"""
+struct MeanFieldPlus <: EntropySolver end
+
+"""
     TreeLike(omega=1)
 
 Entropy solver that treats every structure as a tree, charging `n - 1` bond volumes on top of the
@@ -224,6 +243,67 @@ function _entropy(::Nothing, poly::Polyform, solver::TreeLike; embed3d)
     return solver.omega^(nparticles(poly) - 1) * orientational_volume(d) / symmetrynumber(poly)
 end
 
+"""
+    twocore(poly::Polyform)
+
+Return the particle indices of the 2-core of `poly`: what is left once particles of degree one are
+deleted repeatedly. It is empty for a tree and everything for a structure with no branches.
+"""
+function twocore(poly::Polyform)
+    n = nparticles(poly)
+    degree = zeros(Int, n)
+    neighbours = [Int[] for _ in 1:n]
+    for ((p1, _), (p2, _)) in bonds(poly)
+        degree[p1] += 1
+        degree[p2] += 1
+        push!(neighbours[p1], p2)
+        push!(neighbours[p2], p1)
+    end
+
+    alive = trues(n)
+    pending = [i for i in 1:n if degree[i] <= 1]
+    while !isempty(pending)
+        i = pop!(pending)
+        alive[i] || continue
+        alive[i] = false
+        for j in neighbours[i]
+            alive[j] || continue
+            degree[j] -= 1
+            degree[j] <= 1 && push!(pending, j)
+        end
+    end
+    return findall(alive)
+end
+
+_entropy(potential, poly::Polyform, ::MeanFieldPlus; embed3d) = throw(ArgumentError(
+    "MeanFieldPlus needs a `RigidSpringPotential`, got $(nameof(typeof(potential)))"))
+
+function _entropy(rsp::RigidSpringPotential, poly::Polyform, ::MeanFieldPlus; embed3d)
+    d = embed3d ? 3 : dimension(poly)
+    n = nparticles(poly)
+    Ω = orientational_volume(d) / symmetrynumber(poly)
+    n == 1 && return Ω
+
+    _checkbondsunstressed(rsp, poly)
+    core = twocore(poly)
+    incore = falses(n)
+    incore[core] .= true
+    corebonds = [b for b in bonds(poly) if incore[b[1][1]] && incore[b[2][1]]]
+
+    # the branches: one bond volume for every bond the pruning removed
+    npruned = length(collect(bonds(poly))) - length(corebonds)
+    logΩ = npruned * mean(logbondvolume(rsp, c1, c2) for (c1, c2) in bondcolors(poly))
+
+    # the core: mean field over its own particles and its own bonds, the branches having already
+    # been accounted for
+    m = length(core)
+    if m > 1
+        covariances = collect(_patchcovariances(rsp, poly, embed3d; bondlist=corebonds))
+        logΩ += (m - 1) / m * sum(_logcompatibleomega(covariances[i]...) for i in core)
+    end
+    return Ω * exp(logΩ)
+end
+
 function _entropy(bond_potential, poly::Polyform, ::TreeLike; embed3d)
     d = embed3d ? 3 : dimension(poly)
     Ω = orientational_volume(d) / symmetrynumber(poly)
@@ -260,13 +340,14 @@ _sitepose(poly::Polyform, particle, site, embed3d) =
 # The total stiffness kᵢ carried by each particle, and Σᵢ, the covariance of every patch on it in
 # its own frame. In an unstressed structure a neighbour's averaged patches land exactly on the ones
 # facing them, so ⟨Sᵢ⟩ = Σᵢ Rᵢᵀ and Φ_d sees only the eigenvalues of Σᵢ.
-function _patchcovariances(rsp::RigidSpringPotential{D,F}, poly::Polyform, embed3d) where {D,F}
+function _patchcovariances(rsp::RigidSpringPotential{D,F}, poly::Polyform, embed3d;
+                           bondlist=bonds(poly)) where {D,F}
     n = nparticles(poly)
     ks = zeros(F, n)
     means = fill(zero(SVector{D,F}), n)
     seconds = fill(zero(SMatrix{D,D,F}), n)
 
-    for ((p1, s1), (p2, s2)) in bonds(poly)
+    for ((p1, s1), (p2, s2)) in bondlist
         slots = _slots(rsp, _sitecolor(poly, p1, s1), _sitecolor(poly, p2, s2))
         k = rsp.k[slots...]
         for (p, s, slot) in ((p1, s1, slots[1]), (p2, s2, slots[2]))

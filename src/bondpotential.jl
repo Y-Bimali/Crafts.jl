@@ -141,18 +141,67 @@ bondenergy(rsp::RigidSpringPotential, pose1, pose2, color1, color2) = rsp(pose1,
 
 The configurational integral `ω(S, k) = exp(-∑ε) ∫ exp(-V(g)) dg` of a single bond, over the relative pose
 `g ∈ SE(d)` of the two binding sites that form it, excluding the binding energy.
+
+By default this is the stiff spring value, the Laplace expansion of that integral about its minimum.
+Passing `exact = true` evaluates it without approximation instead, through [`logphi`](@ref); the two
+agree once the springs are stiff enough that the bond cannot explore its full orientational range.
 """
-bondvolume(potential, color1=1, color2=1) = exp(logbondvolume(potential, color1, color2))
+bondvolume(potential, color1=1, color2=1; kwargs...) =
+    exp(logbondvolume(potential, color1, color2; kwargs...))
 
 logbondvolume(potential, color1=1, color2=1) = throw(ArgumentError(
     "$(nameof(typeof(potential))) has no closed-form bond volume; use a Laplace solver instead"))
 
-function logbondvolume(rsp::RigidSpringPotential{D}, color1=1, color2=1) where {D}
+function logbondvolume(rsp::RigidSpringPotential{D}, color1=1, color2=1;
+                       exact=false) where {D}
     c1, c2 = _slots(rsp, color1, color2)
     k = rsp.k[c1, c2]
+    exact && return D / 2 * log(2π / k) -
+                   k * (tr(rsp.Scc[c1]) + tr(rsp.Scc[c2])) / 2 + logphi(k * rsp.Sij[c1, c2])
+
     σ = _orientedsingularvalues(k * rsp.Sij[c1, c2])
     return D / 2 * log(2π / k) + D * (D - 1) / 4 * log(2π) - _strainenergy(rsp, c1, c2, σ) -
            sum(log(σ[μ] + σ[ν]) for μ in 1:D for ν in (μ + 1):D; init=zero(eltype(σ))) / 2
+end
+
+# besselix(ν, x) = besseli(ν, x) exp(-|x|), so this recovers the log of the unscaled function
+# without ever forming the overflowing intermediate.
+_logbesseli0(x) = log(besselix(0, x)) + abs(x)
+
+"""
+    logphi(A)
+
+Return `log Φ_d(A)` with `Φ_d(A) = ∫_SO(d) exp(tr(A R)) dR`, the orientational integral of a rigid
+spring bond, exactly.
+
+Closed form in two dimensions, and a one dimensional Bessel integral in three. `Φ_d` grows like
+`exp(∑ σ̃_μ)` in the singular values of `A` while the prefactor of ω decays like `exp(-k tr(S₁₁+S₂₂)/2)`,
+and the two cancel for compatible patches, so everything is kept in logs.
+
+The three dimensional integrand peaks at the endpoint, ever more sharply as the springs stiffen.
+Substituting `t = 1 - u` moves that peak to `t = 0` and pulls its height out as `exp(∑ σ̃_μ)`, leaving
+`exp(-(σ̃₁+σ̃₂)t)`, and geometric breakpoints then resolve it however narrow it becomes.
+"""
+function logphi(A::AbstractMatrix)
+    d = size(A, 1)
+    if d == 2
+        return log(2π) + _logbesseli0(sqrt(tr(A)^2 + (A[1, 2] - A[2, 1])^2))
+    elseif d == 3
+        # ascending, with the smallest carrying sign(det A). Not `_orientedsingularvalues`, which
+        # orders them the other way round: the expression below indexes them positionally, so the
+        # convention has to be fixed here rather than inherited.
+        μ = sort(svdvals(A))
+        σ = [sign(det(A)) * μ[1], μ[2], μ[3]]
+        a = (σ[3] + σ[2]) / 2
+        b = (σ[3] - σ[2]) / 2
+        s = σ[1] + σ[2]
+        g(t) = exp(-s * t) * besselix(0, a * (2 - t)) * besselix(0, b * t)
+        edges = unique([0.0; 2 .* exp10.(range(-14, 0; length=29))])
+        integral = sum(first(quadgk(g, edges[i], edges[i + 1]; rtol=1e-10))
+                       for i in 1:(length(edges) - 1))
+        return log(4π^2) + sum(σ) + log(integral)
+    end
+    throw(ArgumentError("Φ_d is implemented for d = 2 and d = 3, got d = $d"))
 end
 
 """
