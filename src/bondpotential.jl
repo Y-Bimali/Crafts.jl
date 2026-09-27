@@ -32,25 +32,35 @@ struct RigidSpringPotential{D,F,L} <: BondPotential
 end
 
 # `k` is the total spring constant; a vector splits it over the patches as the kα.
-_patchweights(n, ks::AbstractVector) = (sum(ks), ks ./ sum(ks))
+_patchweights(n, ks::AbstractVector) = (ktot = sum(ks); (ktot, ks ./ ktot))
 _patchweights(n, k::Real) = (k, fill(inv(n), n))
 
-# With rank(S) < d - 1 the bond keeps a free rotation: Φ_d stays finite, but its stiff limit does
-# not, since then some σ̃_μ + σ̃_ν vanishes. That means one patch in 2d, or collinear patches in 3d.
-function _checkedcovariance(S::SMatrix{D}) where {D}
-    r = rank(S)
-    r >= D - 1 || throw(ArgumentError("patch covariance has rank $r, so the bond is free to " *
-                                      "rotate; $(D)d needs at least rank $(D - 1)"))
+# A bond keeps a free rotation when some pair sum λ_μ + λ_ν of the patch covariance vanishes: Φ_d
+# stays finite there but its stiff limit does not, and it is exactly those pair sums that the bond
+# volume divides by. The smallest of them is λ_{D-1} + λ_D, so the test is on the second smallest
+# eigenvalue, measured against the largest to stay scale free. Free rotation means one patch in 2d,
+# or collinear patches in 3d.
+function _checkedcovariance(S::SMatrix{D}; rtol=sqrt(eps(real(float(eltype(S)))))) where {D}
+    λ = eigvals(Symmetric(S))
+    λ[2] > rtol * λ[D] || throw(ArgumentError(
+        "patch covariance has second smallest eigenvalue $(λ[2]) against largest $(λ[D]), so the " *
+        "bond is free to rotate; $(D)d needs at least $(D - 1) stiff directions"))
     return S
 end
 
-function _compatiblepair(S::SMatrix{D,D,F}, k) where {D,F}
-    # Bonded sites face each other (`Roly.standard_offset`), so their relative orientation at
-    # contact is R⋆ = standard_rotationᵀ. Compatibility gives S₁₂ = S₁₁ R⋆ and S₂₂ = R⋆ᵀ S₁₁ R⋆,
-    # of which only tr(S₂₂) is needed, and that equals tr(S₁₁), so one slot still holds everything.
+"""
+    RigidSpringPotential{D,F,L}(S, k)
+
+Construct a rigid spring potential with compatible patches, given by the covariance matrix `S`, and
+the total stiffness `k`.
+
+Bonded sites face each other (`Roly.standard_offset`), so their relative orientation at contact is
+`R⋆ = standard_rotationᵀ`.
+"""
+function RigidSpringPotential{D,F,L}(S::SMatrix{D,D,F,L}, k::Real) where {D,F,L}
     Rstar = Roly.standard_rotation(F, Val(D))'
     Sij = fill(SMatrix{D,D,F}(_checkedcovariance(S) * Rstar), 1, 1)
-    return RigidSpringPotential{D,F,D * D}(Sij, [S], fill(F(k), 1, 1), true)
+    return RigidSpringPotential{D,F,L}(Sij, [S], fill(F(k), 1, 1), true)
 end
 
 """
@@ -61,7 +71,10 @@ Harmonic springs of total stiffness `k` between the patch clouds of two bonded b
 Two dimensional, with the patches spread uniformly along a segment of length `σ` across the site,
 which has second moment `σ²/12`.
 """
-RigidSpringPotential(σ::Real=1; k=1) = _compatiblepair(SMatrix{2,2,float(typeof(σ))}(0, 0, 0, σ^2 / 12), k)
+function RigidSpringPotential(σ::Real=1; k=1)
+    F = float(typeof(σ))
+    return RigidSpringPotential{2,F,4}(SMatrix{2,2,F}(0, 0, 0, σ^2 / 12), k)
+end
 
 """
     RigidSpringPotential(σx, σy; k=1)
@@ -71,10 +84,10 @@ Harmonic springs of total stiffness `k` between the patch clouds of two bonded b
 Three dimensional, with the patches spread uniformly over a `σx x σy` sheet across the site, which
 has second moments `σx²/12` and `σy²/12`.
 """
-RigidSpringPotential(σx::Real, σy::Real; k=1) =
-    _compatiblepair(SMatrix{3,3,float(promote_type(typeof(σx), typeof(σy)))}(0, 0, 0, 0,
-                                                                            σx^2 / 12, 0, 0, 0,
-                                                                            σy^2 / 12), k)
+function RigidSpringPotential(σx::Real, σy::Real; k=1)
+    F = float(promote_type(typeof(σx), typeof(σy)))
+    return RigidSpringPotential{3,F,9}(SMatrix{3,3,F}(0, 0, 0, 0, σx^2 / 12, 0, 0, 0, σy^2 / 12), k)
+end
 
 """
     RigidSpringPotential(A::AbstractMatrix; k=1)
@@ -89,7 +102,7 @@ function RigidSpringPotential(A::AbstractMatrix; k=1)
     ktot, w = _patchweights(n, k)
     F = float(promote_type(eltype(A), eltype(w)))
     α = A .- A * w
-    return _compatiblepair(SMatrix{D,D,F}(α * (w .* α')), ktot)
+    return RigidSpringPotential{D,F,D * D}(SMatrix{D,D,F}(α * (w .* α')), ktot)
 end
 
 """
@@ -131,29 +144,51 @@ end
     bondenergy(potential, pose1, pose2, color1, color2)
 
 Energy of one bond, given the lab poses and colors of the two binding sites that form it.
+
+A bond potential is called as `potential(pose1, pose2, color1, color2)`, so one that does not resolve
+colors still has to accept and ignore them.
 """
-bondenergy(potential, pose1, pose2, color1, color2) = potential(pose1, pose2)
-bondenergy(rsp::RigidSpringPotential, pose1, pose2, color1, color2) = rsp(pose1, pose2, color1, color2)
+bondenergy(potential, pose1, pose2, color1, color2) = potential(pose1, pose2, color1, color2)
+
+# The two binding site poses of a bond whose second site is displaced by `ξ`, site 1 at the origin
+# and site 2 facing it, which is how Roly places bonded sites. `ξ` has the `dtot = d(d+1)/2`
+# coordinates of the relative pose the bond volume integrates over, and `ξ = 0` is the configuration
+# the Laplace solvers expand about.
+function _bondposes(::Val{D}, ξ) where {D}
+    F = eltype(ξ)
+    rot = D == 2 ? Angle2d{F} : RotXYZ{F}
+    p1 = Pose(zero(SVector{D,F}), rot(ntuple(_ -> zero(F), D * (D - 1) ÷ 2)...))
+    p2 = Pose(SVector{D,F}(ξ[1:D]), rot(ξ[(D + 1):end]...) * Roly.standard_rotation(F, Val(D)))
+    return p1, p2
+end
 
 """
     bondvolume(potential, color1=1, color2=1)
     logbondvolume(potential, color1=1, color2=1)
 
 The configurational integral `ω(S, k) = exp(-∑ε) ∫ exp(-V(g)) dg` of a single bond, over the relative pose
-`g ∈ SE(d)` of the two binding sites that form it, excluding the binding energy.
+`g ∈ SE(d)` of the two binding sites that form it, excluding the energy at the minimum.
 
-By default this is the stiff spring value, the Laplace expansion of that integral about its minimum.
-Passing `exact = true` evaluates it without approximation instead, through [`logphi`](@ref); the two
-agree once the springs are stiff enough that the bond cannot explore its full orientational range.
+By default this is evaluated using Laplace's approximation. Passing `exact=true` will compute the result exactly, if
+the potential implements the exact calculation.
+
+A potential with no closed form is expanded about the bonded pose by automatic differentiation,
+which needs the dimension `d` of that pose since only the caller knows it. A `RigidSpringPotential`
+carries its own and ignores the keyword.
 """
 bondvolume(potential, color1=1, color2=1; kwargs...) =
     exp(logbondvolume(potential, color1, color2; kwargs...))
 
-logbondvolume(potential, color1=1, color2=1) = throw(ArgumentError(
-    "$(nameof(typeof(potential))) has no closed-form bond volume; use a Laplace solver instead"))
+function logbondvolume(potential, color1=1, color2=1; d, kwargs...)
+    dtot = d * (d + 1) ÷ 2
+    V(ξ) = bondenergy(potential, _bondposes(Val(d), ξ)..., color1, color2)
+    H = ForwardDiff.hessian(V, zeros(dtot))
+    return dtot / 2 * log(2π) - logdet(Symmetric(H)) / 2
+end
 
 function logbondvolume(rsp::RigidSpringPotential{D}, color1=1, color2=1;
-                       exact=false) where {D}
+                       exact=false, d=D) where {D}
+    D == d || throw(ArgumentError("$(D)d bond potential asked for a $(d)d bond volume"))
     c1, c2 = _slots(rsp, color1, color2)
     k = rsp.k[c1, c2]
     exact && return D / 2 * log(2π / k) -
@@ -187,11 +222,7 @@ function logphi(A::AbstractMatrix)
     if d == 2
         return log(2π) + _logbesseli0(sqrt(tr(A)^2 + (A[1, 2] - A[2, 1])^2))
     elseif d == 3
-        # ascending, with the smallest carrying sign(det A). Not `_orientedsingularvalues`, which
-        # orders them the other way round: the expression below indexes them positionally, so the
-        # convention has to be fixed here rather than inherited.
-        μ = sort(svdvals(A))
-        σ = [sign(det(A)) * μ[1], μ[2], μ[3]]
+        σ = _orientedsingularvalues(SMatrix{3,3}(A))
         a = (σ[3] + σ[2]) / 2
         b = (σ[3] - σ[2]) / 2
         s = σ[1] + σ[2]
@@ -222,17 +253,19 @@ function checkpotential(rsp::RigidSpringPotential{D}, rules::BindingRules, d::In
 end
 
 """
-    contactexcess(potential, color1=1, color2=1)
+    contactexcess(rsp::RigidSpringPotential, color1=1, color2=1)
 
 How far above its own minimum a bond sits when its two binding sites are placed as Roly bonds them,
-`k [Σ_μ σ̃_μ(S₁₂) - tr(S₁₂ R⋆ᵀ)]`. Zero exactly when the potential is minimised at that pose.
+`k [Σ_μ σ̃_μ(S₁₂) - tr(S₁₂ R⋆ᵀ)]`. Zero exactly when the potential is minimised at that pose, so that
+`V(contact) = strainenergy + contactexcess`.
 
 Distinct from [`strainenergy`](@ref), which asks only whether the springs can relax *somewhere*. A
 potential is free to relax elsewhere and [`bondvolume`](@ref) will still be right, since it
 integrates over all poses; the Laplace solvers expand about the bonded pose and so reject it.
-"""
-contactexcess(potential, color1=1, color2=1) = 0.0
 
+Defined for a rigid spring only, where both terms are closed form. Another potential would need its
+minimum found numerically, so the Laplace solvers take its expansion point on trust.
+"""
 function contactexcess(rsp::RigidSpringPotential{D,F}, color1=1, color2=1) where {D,F}
     c1, c2 = _slots(rsp, color1, color2)
     S = rsp.Sij[c1, c2]
@@ -262,18 +295,17 @@ _strainenergy(rsp, c1, c2, σ) = rsp.k[c1, c2] / 2 * (tr(rsp.Scc[c1]) + tr(rsp.S
 
 # log ω(k, S) for compatible patches of covariance `S`: there the strain cancels and Φ_d leaves
 # √(2π/k)^dtot / ∏_{μ<ν} √(λ_μ + λ_ν), with λ the eigenvalues of S.
-function _logcompatibleomega(k, S::SMatrix{D,D}) where {D}
+function _logomega_compatible(k, S::SMatrix{D,D}) where {D}
     λ = eigvals(Symmetric(S))
     return (D * (D + 1) ÷ 2) / 2 * log(2π / k) -
            sum(log(λ[μ] + λ[ν]) for μ in 1:D for ν in (μ + 1):D) / 2
 end
 
-# The oriented singular values: σ̃ = σ except that the smallest one picks up sgn(det A), which is
-# what restricts tr(A R) to SO(d) rather than O(d). Everything downstream is symmetric in the σ̃,
-# so `svdvals`' descending order is left alone and the last entry is the one that flips.
+# The oriented singular values, ascending: σ̃ = σ except that the smallest picks up sgn(det A),
+# which is what restricts tr(A R) to SO(d) rather than O(d). Ascending so `logphi` can index them
+# positionally; every other caller uses only symmetric functions of them, so the order is free.
 function _orientedsingularvalues(A::SMatrix{D,D}) where {D}
-    σ = svdvals(A)
-    return setindex(σ, sign(det(A)) * σ[D], D)
+    σ = reverse(svdvals(A))
+    return setindex(σ, sign(det(A)) * σ[1], 1)
 end
 
-@doc (@doc bondvolume) logbondvolume

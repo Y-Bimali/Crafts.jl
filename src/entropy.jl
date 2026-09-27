@@ -144,45 +144,36 @@ struct COMLaplace <: EntropySolver end
 """
     MeanField()
 
-Entropy solver that is exact at mean field level for a [`RigidSpringPotential`](@ref), where every
-particle sees its neighbours' patches at their thermally averaged positions rather than at their
-instantaneous ones.
-
-Needs an unstressed structure, so that those averaged positions are the ones the particles are glued
-to; each particle then contributes `ω(kᵢ, ⟨Sᵢ⟩)` built from the spread of its own patches, and the
-structure's topology enters only through how many patches each particle carries.
-
-Being variational it can only undercount. A dimer it gets exactly right, since tethering one of two
-particles leaves a single free one and the product ansatz is then no ansatz at all.
+Entropy solver that applies mean field theory and averages over all particle tetherings.
 """
 struct MeanField <: EntropySolver end
 
 """
-    MeanFieldPlus()
+    MeanFieldIsotropic()
+    MeanFieldTopological()
 
-Entropy solver that treats the tree-like part of a structure the way [`TreeLike`](@ref) does and the
-rest the way [`MeanField`](@ref) does.
+Entropy solver that is [`MeanField`](@ref) with every single-particle Hessian replaced by `zᵢ` copies
+of the single-bond one, reducing the answer to the tree-like result times a penalty fixed by the
+degree sequence alone.
 
-Repeatedly deleting particles of degree one leaves the *2-core*, the subgraph carrying every cycle.
-What the pruning removes is a forest of branches hanging off that core, and a forest of bonds is
-exactly what `TreeLike` gets right, so every bond it removes is charged one bond volume. The core is
-where the cycles are, and `TreeLike` has nothing to say about those, so it is handed to `MeanField`.
+`MeanFieldTopological` substitutes the structure mean coordination number `z̄ = 2 n_b / n` for every `zᵢ`,
+resulting in
 
-The bonds removed are counted, not the particles: pruning a tree of `n` particles removes all `n` of
-them but only `n - 1` bonds, and it is the bonds that carry the volumes.
+    Ω_s = |SO(d)| ω^(n-1) (n / 2 n_b)^(dtot (n-1) / 2) / σ_s .
 
-Reduces to `TreeLike` on a tree, whose core is empty, and to `MeanField` on a structure that is its
-own core. In between it is neither, and unlike `MeanField` it is not variational.
+This underestimates `Ω_s`, by an amount growing with the variance of the degrees.
 """
-struct MeanFieldPlus <: EntropySolver end
+struct MeanFieldIsotropic{uniform} <: EntropySolver end
+MeanFieldIsotropic() = MeanFieldIsotropic{false}()
+
+const MeanFieldTopological = MeanFieldIsotropic{true}
 
 """
     TreeLike(omega=1)
 
-Entropy solver that treats every structure as a tree, charging `n - 1` bond volumes on top of the
-structure's orientational volume. A structure that really is a tree has exactly `n - 1` bonds
-and the answer is exact. For non-trees, the bond volumes are averaged geometrically over the bonds. 
-With a bond potential the bondvolumes are computed from [`bondvolume`](@ref), with no potential each 
+Entropy solver that treats every structure as a tree. A structure that really is a tree has exactly `n - 1` bonds
+and the answer is exact. For non-trees, the bond volumes are averaged over the bonds. 
+Given a bond potential, the bondvolumes are computed from [`bondvolume`](@ref), with no potential each 
 bond contributes `omega`.
 """
 struct TreeLike <: EntropySolver
@@ -194,9 +185,9 @@ TreeLike() = TreeLike(1.0)
     EntropyModel(potential, solver=COMLaplace(); embed3d=false)
     EntropyModel(solver=TreeLike(); embed3d=false)
 
-Everything needed to turn a structure into a partition function: the bond `potential`, the
-`solver` used to evaluate it, and whether to embed the structure in 3d. The second form is for
-solvers that take no potential.
+An EntropyModel is a bond potential together with a solver that computes bond volumes.
+
+`embed3d=true` embeds a two-dimensional structure in 3d.
 """
 struct EntropyModel{P,S<:EntropySolver}
     potential::P
@@ -229,9 +220,13 @@ entropydimension(m::EntropyModel, x) = m.embed3d ? 3 : dimension(x)
 
 # A Laplace solver reads off the curvature at the pose Roly bonds the sites in, so it is only an
 # expansion of anything if the potential is actually stationary there.
-function _checkbondsrelaxed(bond_potential, poly::Polyform)
+# Only a rigid spring reports how far the bonded pose sits above its own minimum, so that is the
+# only potential whose expansion point can be checked here rather than taken on trust.
+_checkbondsrelaxed(bond_potential, poly::Polyform) = nothing
+
+function _checkbondsrelaxed(rsp::RigidSpringPotential, poly::Polyform)
     for (c1, c2) in bondcolors(poly)
-        excess = contactexcess(bond_potential, c1, c2)
+        excess = contactexcess(rsp, c1, c2)
         excess > sqrt(eps(typeof(excess))) && throw(ArgumentError(
             "invalid minimizer for Laplace's method: binding site colors ($c1, $c2) bond energy is $excess above the potential's minimum/"))
     end
@@ -243,67 +238,6 @@ function _entropy(::Nothing, poly::Polyform, solver::TreeLike; embed3d)
     return solver.omega^(nparticles(poly) - 1) * orientational_volume(d) / symmetrynumber(poly)
 end
 
-"""
-    twocore(poly::Polyform)
-
-Return the particle indices of the 2-core of `poly`: what is left once particles of degree one are
-deleted repeatedly. It is empty for a tree and everything for a structure with no branches.
-"""
-function twocore(poly::Polyform)
-    n = nparticles(poly)
-    degree = zeros(Int, n)
-    neighbours = [Int[] for _ in 1:n]
-    for ((p1, _), (p2, _)) in bonds(poly)
-        degree[p1] += 1
-        degree[p2] += 1
-        push!(neighbours[p1], p2)
-        push!(neighbours[p2], p1)
-    end
-
-    alive = trues(n)
-    pending = [i for i in 1:n if degree[i] <= 1]
-    while !isempty(pending)
-        i = pop!(pending)
-        alive[i] || continue
-        alive[i] = false
-        for j in neighbours[i]
-            alive[j] || continue
-            degree[j] -= 1
-            degree[j] <= 1 && push!(pending, j)
-        end
-    end
-    return findall(alive)
-end
-
-_entropy(potential, poly::Polyform, ::MeanFieldPlus; embed3d) = throw(ArgumentError(
-    "MeanFieldPlus needs a `RigidSpringPotential`, got $(nameof(typeof(potential)))"))
-
-function _entropy(rsp::RigidSpringPotential, poly::Polyform, ::MeanFieldPlus; embed3d)
-    d = embed3d ? 3 : dimension(poly)
-    n = nparticles(poly)
-    Ω = orientational_volume(d) / symmetrynumber(poly)
-    n == 1 && return Ω
-
-    _checkbondsunstressed(rsp, poly)
-    core = twocore(poly)
-    incore = falses(n)
-    incore[core] .= true
-    corebonds = [b for b in bonds(poly) if incore[b[1][1]] && incore[b[2][1]]]
-
-    # the branches: one bond volume for every bond the pruning removed
-    npruned = length(collect(bonds(poly))) - length(corebonds)
-    logΩ = npruned * mean(logbondvolume(rsp, c1, c2) for (c1, c2) in bondcolors(poly))
-
-    # the core: mean field over its own particles and its own bonds, the branches having already
-    # been accounted for
-    m = length(core)
-    if m > 1
-        covariances = collect(_patchcovariances(rsp, poly, embed3d; bondlist=corebonds))
-        logΩ += (m - 1) / m * sum(_logcompatibleomega(covariances[i]...) for i in core)
-    end
-    return Ω * exp(logΩ)
-end
-
 function _entropy(bond_potential, poly::Polyform, ::TreeLike; embed3d)
     d = embed3d ? 3 : dimension(poly)
     Ω = orientational_volume(d) / symmetrynumber(poly)
@@ -311,12 +245,47 @@ function _entropy(bond_potential, poly::Polyform, ::TreeLike; embed3d)
 
     # A tree of `n` particles has exactly `n - 1` bonds, so the geometric mean is just their
     # product; anything with cycles is sees `n - 1` "typical" bonds instead.
-    logω = mean(logbondvolume(bond_potential, c1, c2) for (c1, c2) in bondcolors(poly))
+    logω = mean(logbondvolume(bond_potential, c1, c2; d) for (c1, c2) in bondcolors(poly))
     return Ω * exp((nparticles(poly) - 1) * logω)
 end
 
-_entropy(potential, poly::Polyform, ::MeanField; embed3d) = throw(ArgumentError(
-    "MeanField needs a `RigidSpringPotential`, got $(nameof(typeof(potential)))"))
+# The coordination number of every particle of `poly`, in one pass over its bonds.
+function _degrees(poly::Polyform)
+    degrees = zeros(Int, nparticles(poly))
+    for bond in bonds(poly), loc in bond
+        degrees[loc.particle] += 1
+    end
+    return degrees
+end
+
+function _entropy(bond_potential, poly::Polyform, ::MeanFieldIsotropic{uniform};
+                  embed3d) where {uniform}
+    treelike = _entropy(bond_potential, poly, TreeLike(1); embed3d)
+    n = nparticles(poly)
+    n == 1 && return treelike
+
+    d = embed3d ? 3 : dimension(poly)
+    dtot = d * (d + 1) ÷ 2
+    uniform && return treelike * (2 * nbonds(poly) / n)^(-dtot * (n - 1) / 2)
+    return treelike * exp(-dtot * (n - 1) / (2n) * sum(log, _degrees(poly)))
+end
+
+function _entropy(bond_potential, poly::Polyform, ::MeanField; embed3d)
+    d = embed3d ? 3 : dimension(poly)
+    n = nparticles(poly)
+    Ω = orientational_volume(d) / symmetrynumber(poly)
+    n == 1 && return Ω
+
+    _checkbondsrelaxed(bond_potential, poly)
+    dtot = d * (d + 1) ÷ 2
+    H = hessian(bond_potential, poly; embed3d)
+    logω = 0.0
+    for i in 1:n
+        block = ((dtot * (i - 1)) + 1):(dtot * i)
+        logω += dtot / 2 * log(2π) - logdet(Symmetric(H[block, block])) / 2
+    end
+    return Ω * exp((n - 1) / n * logω)
+end
 
 function _entropy(rsp::RigidSpringPotential, poly::Polyform, ::MeanField; embed3d)
     d = embed3d ? 3 : dimension(poly)
@@ -325,9 +294,7 @@ function _entropy(rsp::RigidSpringPotential, poly::Polyform, ::MeanField; embed3
     n == 1 && return Ω
 
     _checkbondsunstressed(rsp, poly)
-    # Which particle is tethered changes the answer, so the geometric mean over all n tetherings is
-    # taken.
-    logω = sum(_logcompatibleomega(k, S) for (k, S) in _patchcovariances(rsp, poly, embed3d))
+    logω = sum(_logomega_compatible(k, S) for (k, S) in _patchcovariances(rsp, poly, embed3d))
     return Ω * exp((n - 1) / n * logω)
 end
 
