@@ -232,6 +232,51 @@
                                                                      maxsize=3, verbose=false))
     end
 
+    # A potential with no closed form takes the single-particle blocks of the Hessian instead, which
+    # for a rigid spring is the same Gaussian the closed form integrates.
+    let opaque = (p1, p2, c1, c2) -> rsp(p1, p2, c1, c2)
+        for rules in (chain, ring)
+            closed = partitionfunctions(AssemblySystem(rules, EntropyModel(rsp, MeanField());
+                                                       maxsize=4, verbose=false))
+            generic = partitionfunctions(AssemblySystem(rules, EntropyModel(opaque, MeanField());
+                                                        maxsize=4, verbose=false))
+            @test generic ≈ closed rtol = 1e-6
+        end
+    end
+
+    # The degree-based mean field solvers are the tree result times a penalty set by the degrees
+    # z_i alone: ∏ z_i^(-dtot(n-1)/2n), or z̄^(-dtot(n-1)/2) with the mean degree z̄ = 2 n_b / n.
+    let dtot = 3, model(solver) = AssemblySystem(ring, EntropyModel(rsp, solver); maxsize=4, verbose=false)
+        strs = structures(model(TreeLike()))
+        tree = partitionfunctions(model(TreeLike()))
+        topo = partitionfunctions(model(MeanFieldTopological()))
+        comp = partitionfunctions(model(MeanFieldCompositional()))
+        @test any(s -> nbonds(s) == nparticles(s), strs)              # the closed ring is among them
+
+        for (s, Ωt, Ωtopo, Ωcomp) in zip(strs, tree, topo, comp)
+            n, z = nparticles(s), Crafts._degrees(s)
+            @test sum(z) == 2 * nbonds(s)
+            @test length(z) == n
+            if n == 1
+                @test Ωtopo ≈ Ωt && Ωcomp ≈ Ωt
+                continue
+            end
+            @test all(>=(1), z)
+            @test Ωtopo ≈ Ωt * prod(z)^(-dtot * (n - 1) / (2n))
+            @test Ωcomp ≈ Ωt * (2 * nbonds(s) / n)^(-dtot * (n - 1) / 2)
+            # the geometric mean of the degrees is at most their arithmetic mean, with equality
+            # exactly when every particle has the same degree
+            if allequal(z)
+                @test Ωcomp ≈ Ωtopo
+            else
+                @test Ωcomp < Ωtopo
+            end
+        end
+        # a dimer has one bond and degrees (1, 1), so neither solver charges a penalty
+        dimers = findall(s -> nparticles(s) == 2, strs)
+        @test topo[dimers] ≈ tree[dimers] && comp[dimers] ≈ tree[dimers]
+    end
+
     # COMLaplace normalises the centre of mass differently, but must still order structures the same
     for solver in (COMLaplace(), TetheredLaplace())
         Ωs = partitionfunctions(AssemblySystem(chain, EntropyModel(rsp, solver); maxsize=4, verbose=false))
