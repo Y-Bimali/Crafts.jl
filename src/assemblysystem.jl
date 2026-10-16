@@ -28,7 +28,7 @@ function AssemblySystem(bindingrules::BindingRules, entropymodel::EntropyModel; 
     (maxsize > 0 && (isinf(maxsize) || isinteger(maxsize))) ||
         throw(ArgumentError("maxsize=$maxsize must be a positive integer or Inf."))
     checkpotential(entropymodel.potential, bindingrules,
-                   entropydimension(entropymodel, bindingrules))
+                   _embeddim(entropymodel, bindingrules))
 
     P = typeof(Polyform(bindingrules))
     return AssemblySystem{typeof(bindingrules),typeof(entropymodel),P}(
@@ -46,13 +46,7 @@ nspecies(asys::AssemblySystem) = nspecies(asys.bindingrules)
 nbonds(asys::AssemblySystem) = nbonds(asys.bindingrules)
 dimension(asys::AssemblySystem) = dimension(asys.bindingrules)
 
-"""
-    entropydimension(asys::AssemblySystem)
-
-The dimension in which the entropy model of `asys` scores its structures: 3 whenever the model
-embeds, and `dimension(asys)` otherwise.
-"""
-entropydimension(asys::AssemblySystem) = entropydimension(asys.entropymodel, asys.bindingrules)
+_embeddim(asys::AssemblySystem) = _embeddim(asys.entropymodel, asys.bindingrules)
 
 """
     iscomplete(asys::AssemblySystem)
@@ -102,7 +96,7 @@ function _enumerate_compositions(asys::AssemblySystem, kwargs)
     return _tomatrix(asys, (rows[i] for i in sortperm(sizes; alg=MergeSort))), res.status
 end
 
-_entropies(asys::AssemblySystem, strs) = Float64[entropy(asys.entropymodel, p) for p in strs]
+_partitionfunctions(asys::AssemblySystem, strs) = Float64[exp(entropy(asys.entropymodel, p)) for p in strs]
 
 """
     structures(asys::AssemblySystem; enum_kwargs...)
@@ -167,15 +161,15 @@ countstructures(asys::AssemblySystem; kwargs...) = Roly.countpolyforms(asys.bind
 """
     partitionfunctions(asys::AssemblySystem; enum_kwargs...)
 
-Return the per-structure partition functions of `asys`, computed via [`entropy`](@ref) using
-`asys.bondpotential`, computing and caching them on first use.
+Return the per-structure partition functions `Ω_s = exp(S_s)` of `asys`, with `S_s` from [`entropy`](@ref),
+computing and caching them on first use.
 """
 function partitionfunctions(asys::AssemblySystem; maxsize=asys.maxsize, kwargs...)
-    _iscached(asys, (; maxsize, kwargs...)) || return _entropies(asys, structures(asys; maxsize, kwargs...))
+    _iscached(asys, (; maxsize, kwargs...)) || return _partitionfunctions(asys, structures(asys; maxsize, kwargs...))
 
     Ωs = asys.Ωs
     if Ωs === nothing
-        Ωs = _entropies(asys, structures(asys))
+        Ωs = _partitionfunctions(asys, structures(asys))
         asys.Ωs = Ωs
     end
     return Ωs

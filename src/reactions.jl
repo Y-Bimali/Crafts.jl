@@ -206,9 +206,9 @@ _copy_active_bwdrates(net::ReactionNetwork) = net._bwdrates[net.active]
 # constant to compute. Rates are therefore always 3d, whatever the structures' own dimension, and a
 # non-embedding entropy model then scores those same structures in 2d.
 function _warnifnot3d(asys::AssemblySystem)
-    (asys.verbose && entropydimension(asys) != 3) || return nothing
+    (asys.verbose && _embeddim(asys) != 3) || return nothing
     @warn "Reaction rates are computed for particles diffusing in 3d, but the entropy model of " *
-          "this system works in $(entropydimension(asys))d, so its partition functions describe a " *
+          "this system works in $(_embeddim(asys))d, so its partition functions describe a " *
           "different system than its rates. Pass `embed3d=true` to `EntropyModel` to " *
           "embed the structures in 3d."
     return nothing
