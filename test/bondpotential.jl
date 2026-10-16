@@ -84,8 +84,17 @@
     @test bondvolume(RigidSpringPotential(1.0, 1.0; k=1.0)) /
           bondvolume(RigidSpringPotential(1.0, 1.0; k=100.0)) ≈ 100^(6 / 2)
 
-    # Potentials that know nothing about bond volumes have to say so rather than guess.
-    @test_throws ArgumentError bondvolume((p1, p2) -> 0.0)
+    # A potential with no closed form is expanded by automatic differentiation, which needs `d`.
+    let rsp = RigidSpringPotential(centred(2, 3); k=20.0), opaque = (p1, p2, c1, c2) -> rsp(p1, p2, c1, c2)
+        @test_throws UndefKeywordError bondvolume(opaque)
+        @test bondvolume(opaque; d=2) ≈ bondvolume(rsp)
+
+        # `norm` at the bonded pose has no finite automatic derivative, so it needs `perturb`.
+        withnorm = (p1, p2, c1, c2) -> rsp(p1, p2, c1, c2) + norm(p2.x - p1.x)^2
+        withabs2 = (p1, p2, c1, c2) -> rsp(p1, p2, c1, c2) + sum(abs2, p2.x - p1.x)
+        @test_throws ArgumentError bondvolume(withnorm; d=2)
+        @test bondvolume(withnorm; d=2, perturb=true) ≈ bondvolume(withabs2; d=2) rtol = 1e-6
+    end
 
     # A cloud paired with an unrotated copy of itself relaxes when the two sites coincide rather
     # than when they face each other. That is a legitimate model, and `strainenergy` stays zero
@@ -100,8 +109,6 @@
         @test contactexcess(elsewhere) ≈ elsewhere(p, contact) > 0
         @test contactexcess(here) ≈ 0 atol = 1e-12
         @test contactexcess(elsewhere) ≈ 2k * tr(elsewhere.Scc[1])
-        # a potential we cannot inspect is taken at its word
-        @test contactexcess((p1, p2) -> 0.0) == 0
     end
 
     # A potential that cannot describe the rules it is handed is caught when the system is built,
@@ -125,6 +132,16 @@
     ring = BindingRules([1 1 2 3; 2 2 3 4; 3 3 4 1; 4 4 1 2], UnitSquare)
     rsp = RigidSpringPotential(0.6; k=120.0)
     ω = bondvolume(rsp)
+
+    let withnorm = (p1, p2, c1, c2) -> rsp(p1, p2, c1, c2) + norm(p2.x - p1.x)^2,
+        withabs2 = (p1, p2, c1, c2) -> rsp(p1, p2, c1, c2) + sum(abs2, p2.x - p1.x)
+        @test_throws ArgumentError partitionfunctions(AssemblySystem(chain, EntropyModel(withnorm, COMLaplace());
+                                                                     maxsize=3, verbose=false))
+        @test partitionfunctions(AssemblySystem(chain, EntropyModel(withnorm, COMLaplace(); perturb=true);
+                                                maxsize=3, verbose=false)) ≈
+              partitionfunctions(AssemblySystem(chain, EntropyModel(withabs2, COMLaplace());
+                                                maxsize=3, verbose=false)) rtol = 1e-6
+    end
 
     # The tree approximation is exactly one bond volume per bond of a tree.
     asys = AssemblySystem(chain, EntropyModel(rsp, TreeLike()); maxsize=4, verbose=false)
@@ -207,10 +224,7 @@
         @test partitionfunctions(a(1.0)) ./ partitionfunctions(a(64.0)) ≈ 64.0 .^ (3 * (ns .- 1) / 2)
     end
 
-    # Mean field is only worked out for a rigid spring potential, on an unstressed structure.
-    @test_throws ArgumentError partitionfunctions(AssemblySystem(chain,
-                                                                 EntropyModel((p1, p2) -> 0.0,
-                                                                              MeanField())))
+    # Mean field with a rigid spring potential is only worked out on an unstressed structure.
     let offmin = RigidSpringPotential(fill([0.0 0.3 -0.2; -0.4 0.25 0.15], ncolors(chain)); k=50.0)
         @test_throws ArgumentError partitionfunctions(AssemblySystem(chain,
                                                                      EntropyModel(offmin,

@@ -115,12 +115,12 @@ function particleradii(p::Polyform)
     return [sitedistance(species(sys, Roly.speciesindex(part))) for part in p.particles]
 end
 
-siteposition(p::Polyform, v::Integer) = let (i, j) = Roly._vertex_to_particle_site(p, v)
+siteposition(p::Polyform, v::Integer) = let (i, j) = Roly._vertex_to_particle_site(p, v; canonidxs=true)
     _pad3(bindingsite(p.particles[i], bindingrules(p), j).pose.x)
 end
 
 # `halves` indexes binding sites, several of which belong to the same particle.
-particlesat(p::Polyform, vs) = unique!([Roly._vertex_to_particle_site(p, v)[1] for v in vs])
+particlesat(p::Polyform, vs) = unique!([Roly._vertex_to_particle_site(p, v; canonidxs=true).particle for v in vs])
 
 function diffusionconstants(p::Polyform; kwargs...)
     return diffusionconstants(particlepositions(p), particleradii(p); kwargs...)

@@ -150,6 +150,19 @@ colors still has to accept and ignore them.
 """
 bondenergy(potential, pose1, pose2, color1, color2) = potential(pose1, pose2, color1, color2)
 
+# The Hessian of `f` at the bonded configuration `x0`. Bonded sites coincide, so a potential written
+# with e.g. `norm(x)` is smooth there as a function but its automatic derivative is 0 * Inf.
+function _bondedhessian(f, x0; perturb)
+    perturb && return ForwardDiff.hessian(f, x0 .+ sqrt(eps(eltype(x0))))
+    H = ForwardDiff.hessian(f, x0)
+    all(isfinite, H) || throw(ArgumentError(
+        "the Hessian of the bond potential at the bonded configuration is not finite, which happens when " *
+        "the potential is not differentiable there as written, e.g. `norm(x)` at `x = 0`. Write it in a " *
+        "differentiable form, e.g. `sum(abs2, x)` for `norm(x)^2`, or pass `perturb=true` to " *
+        "`EntropyModel` (or `hessian`, `bondvolume`) to evaluate the Hessian a distance √eps away."))
+    return H
+end
+
 # The two binding site poses of a bond whose second site is displaced by `ξ`, site 1 at the origin
 # and site 2 facing it, which is how Roly places bonded sites. `ξ` has the `dtot = d(d+1)/2`
 # coordinates of the relative pose the bond volume integrates over, and `ξ = 0` is the configuration
@@ -173,21 +186,22 @@ By default this is evaluated using Laplace's approximation. Passing `exact=true`
 the potential implements the exact calculation.
 
 A potential with no closed form is expanded about the bonded pose by automatic differentiation,
-which needs the dimension `d` of that pose since only the caller knows it. A `RigidSpringPotential`
-carries its own and ignores the keyword.
+which needs the dimension `d` of that pose since only the caller knows it. `perturb=true` evaluates
+that Hessian a distance `√eps` away from the bonded pose, for potentials whose automatic derivatives
+are not finite there.
 """
 bondvolume(potential, color1=1, color2=1; kwargs...) =
     exp(logbondvolume(potential, color1, color2; kwargs...))
 
-function logbondvolume(potential, color1=1, color2=1; d, kwargs...)
+function logbondvolume(potential, color1=1, color2=1; d, perturb=false, kwargs...)
     dtot = d * (d + 1) ÷ 2
     V(ξ) = bondenergy(potential, _bondposes(Val(d), ξ)..., color1, color2)
-    H = ForwardDiff.hessian(V, zeros(dtot))
+    H = _bondedhessian(V, zeros(dtot); perturb)
     return dtot / 2 * log(2π) - logdet(Symmetric(H)) / 2
 end
 
 function logbondvolume(rsp::RigidSpringPotential{D}, color1=1, color2=1;
-                       exact=false, d=D) where {D}
+                       exact=false, d=D, perturb=false) where {D}
     D == d || throw(ArgumentError("$(D)d bond potential asked for a $(d)d bond volume"))
     c1, c2 = _slots(rsp, color1, color2)
     k = rsp.k[c1, c2]
@@ -307,5 +321,64 @@ end
 function _orientedsingularvalues(A::SMatrix{D,D}) where {D}
     σ = reverse(svdvals(A))
     return setindex(σ, sign(det(A)) * σ[1], 1)
+end
+
+# A Laplace solver reads off the curvature at the pose Roly bonds the sites in, so it is only an
+# expansion of anything if the potential is actually stationary there.
+# Only a rigid spring reports how far the bonded pose sits above its own minimum, so that is the
+# only potential whose expansion point can be checked here rather than taken on trust.
+_checkbondsrelaxed(bond_potential, poly::Polyform) = nothing
+
+function _checkbondsrelaxed(rsp::RigidSpringPotential, poly::Polyform)
+    for (c1, c2) in bondcolors(poly)
+        excess = contactexcess(rsp, c1, c2)
+        excess > sqrt(eps(typeof(excess))) && throw(ArgumentError(
+            "invalid minimizer for Laplace's method: binding site colors ($c1, $c2) bond energy is $excess above the potential's minimum/"))
+    end
+    return nothing
+end
+
+# Mean field takes the neighbours' patches at their averaged positions, which are the glued ones
+# only if every bond really is relaxed where it sits.
+function _checkbondsunstressed(rsp::RigidSpringPotential, poly::Polyform)
+    _checkbondsrelaxed(rsp, poly)
+    for (c1, c2) in bondcolors(poly)
+        strain = strainenergy(rsp, c1, c2)
+        strain > sqrt(eps(typeof(strain))) && throw(ArgumentError(
+            "binding site colors ($c1, $c2) carry a strain energy of $strain, but mean field " *
+            "theory is only worked out here for unstressed structures; see `strainenergy`"))
+    end
+    return nothing
+end
+
+_sitepose(poly::Polyform, particle, site, embed3d) =
+    let sp = bindingsite(species(bindingrules(poly), poly.particles[particle].speciesindex),
+                         site).pose
+        embed3d ? Pose{3}(sp) : sp
+    end
+
+# The total stiffness kᵢ carried by each particle, and Σᵢ, the covariance of every patch on it in
+# its own frame. In an unstressed structure a neighbour's averaged patches land exactly on the ones
+# facing them, so ⟨Sᵢ⟩ = Σᵢ Rᵢᵀ and Φ_d sees only the eigenvalues of Σᵢ.
+function _patchcovariances(rsp::RigidSpringPotential{D,F}, poly::Polyform, embed3d;
+                           bondlist=bonds(poly)) where {D,F}
+    n = nparticles(poly)
+    ks = zeros(F, n)
+    means = fill(zero(SVector{D,F}), n)
+    seconds = fill(zero(SMatrix{D,D,F}), n)
+
+    for ((p1, s1), (p2, s2)) in bondlist
+        slots = _slots(rsp, _sitecolor(poly, p1, s1), _sitecolor(poly, p2, s2))
+        k = rsp.k[slots...]
+        for (p, s, slot) in ((p1, s1, slots[1]), (p2, s2, slots[2]))
+            pose = _sitepose(poly, p, s, embed3d)
+            ks[p] += k
+            means[p] += k * pose.x
+            # the cloud is centred on its own site, so the site sits at its mean patch position and
+            # carrying it over to the particle's frame is the parallel axis theorem
+            seconds[p] += k * (pose.psi * rsp.Scc[slot] * pose.psi' + pose.x * pose.x')
+        end
+    end
+    return ((ks[i], seconds[i] / ks[i] - (means[i] / ks[i]) * (means[i] / ks[i])') for i in 1:n)
 end
 

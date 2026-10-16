@@ -64,8 +64,8 @@
     flat = AssemblySystem(rules2d, EntropyModel(TreeLike()))
     quiet = AssemblySystem(rules2d, EntropyModel(TreeLike()); verbose=false)
     embedded = AssemblySystem(rules2d, EntropyModel(TreeLike(); embed3d=true))
-    @test entropydimension(flat) == 2
-    @test entropydimension(embedded) == 3
+    @test Crafts._embeddim(flat) == 2
+    @test Crafts._embeddim(embedded) == 3
 
     @test_logs (:warn,) ReactionNetwork(flat)
     @test_logs ReactionNetwork(quiet)

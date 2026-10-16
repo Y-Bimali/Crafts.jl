@@ -15,7 +15,7 @@ A disk in an unbounded two-dimensional Stokes flow has no finite mobility at all
 A two-dimensional structure is therefore handled as a flat rigid cluster of spheres suspended in a three-dimensional fluid: its coordinates are padded with `z = 0`, and the rate comes out the same whether or not the entropy model embeds.
 The partition functions do not follow along, so an [`EntropyModel`](@ref) built without `embed3d=true` scores those structures in 2d while these kernels move them in 3d.
 The two meet in the dissociation rates, which [`simulate_kinetics`](@ref) and [`stabilitymatrix`](@ref) get from the forward rates by detailed balance, so the mismatch is not a matter of an overall constant.
-[`ReactionNetwork`](@ref) warns when [`entropydimension`](@ref) is not 3.
+[`ReactionNetwork`](@ref) warns when the entropy model does not embed a two-dimensional system in 3d.
 
 ## Hydrodynamics
 
