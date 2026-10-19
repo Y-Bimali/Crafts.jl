@@ -22,7 +22,7 @@ export indices, reactants, product, bondcounts, cut, halves, isdetailedbalanced
 export StabilityBasis, DensityBasis, SymmetricBasis
 export stabilitymatrix, stabilitymatrix!, stabilityjacobian, stabilityjacobian!, correlationtime
 export orientedbindingrate, smoluchowskirate, diffusionconstants, diffusiontensor, frictiontensor
-export lineardesign, maxyielddesign, minenergydesign
+export lineardesign, maxyielddesign, minenergydesign, isdesignable
 
 include("utils.jl")
 include("bondpotential.jl")
