@@ -19,6 +19,23 @@ Returns `(ξ, residual)`. Requires `Convex` to be loaded.
 function lineardesign end
 
 """
+    isdesignable(M, idxs; optimizer, kwargs...)
+    isdesignable(asys::AssemblySystem, idxs; optimizer, kwargs...)
+
+Returns `true` if there exists a choice of parameters that leads to 100% yield for the structures with indices `idxs`.
+
+Runs [`lineardesign`](@ref) and asks whether its residual, the largest excess free energy left among
+the non-targets, sits below `-atol`. A non-target within `atol` cannot be suppressed relative
+to the targets, so the targets are designable exactly when none is.
+
+Requires `Convex` to be loaded.
+"""
+function isdesignable(M::AbstractMatrix, idxs; atol=1e-6, kwargs...)
+    _, residual = lineardesign(M, idxs; kwargs..., refine=false, atol)
+    return residual < -atol
+end
+
+"""
     maxyielddesign(M, idxs; omegas, maxdensity, optimizer, kwargs...)
     maxyielddesign(asys::AssemblySystem, idxs; maxdensity, optimizer, kwargs...)
 
@@ -81,6 +98,8 @@ maxyielddesign(asys::AssemblySystem, idxs; kwargs...) =
     maxyielddesign(compositionmatrix(asys), idxs; omegas=partitionfunctions(asys), kwargs...)
 minenergydesign(asys::AssemblySystem, idxs; kwargs...) =
     minenergydesign(compositionmatrix(asys), idxs; omegas=partitionfunctions(asys), kwargs...)
+isdesignable(asys::AssemblySystem, idxs; kwargs...) =
+    isdesignable(compositionmatrix(asys), idxs; kwargs...)
 
 # Drops structures that contain bonds or particles absent from the targets, since no choice of
 # parameters can suppress them relative to the targets.
