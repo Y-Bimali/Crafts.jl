@@ -135,8 +135,13 @@
 
     let withnorm = (p1, p2, c1, c2) -> rsp(p1, p2, c1, c2) + norm(p2.x - p1.x)^2,
         withabs2 = (p1, p2, c1, c2) -> rsp(p1, p2, c1, c2) + sum(abs2, p2.x - p1.x)
-        @test_throws ArgumentError partitionfunctions(AssemblySystem(chain, EntropyModel(withnorm, COMLaplace());
-                                                                     maxsize=3, verbose=false))
+        # Exercise the guard through `logbondvolume`, where `_bondposes` places both sites at the
+        # origin, so `norm` is differentiated at exactly zero and the Hessian is always NaN. Going
+        # through a structure instead would put the sites a rounding error apart (~1e-33 here), where
+        # `norm` is differentiable and the guard legitimately stays silent.
+        @test_throws ArgumentError logbondvolume(withnorm, 1, 1; d=2)
+        @test logbondvolume(withnorm, 1, 1; d=2, perturb=true) ≈ logbondvolume(withabs2, 1, 1; d=2) rtol = 1e-6
+
         @test partitionfunctions(AssemblySystem(chain, EntropyModel(withnorm, COMLaplace(); perturb=true);
                                                 maxsize=3, verbose=false)) ≈
               partitionfunctions(AssemblySystem(chain, EntropyModel(withabs2, COMLaplace());
