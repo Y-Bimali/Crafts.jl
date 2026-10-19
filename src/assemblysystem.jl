@@ -14,7 +14,7 @@ mutable struct AssemblySystem{BR<:BindingRules,EM<:EntropyModel,P<:Polyform}
     structures::Union{Nothing,Vector{P}}
     M::Union{Nothing,Matrix{Int}}
     Ωs::Union{Nothing,Vector{Float64}}
-    status::Union{Nothing,RSStatus}
+    status::Union{Nothing,EnumerationStatus}
 end
 
 """
@@ -38,7 +38,7 @@ end
 
 function Base.show(io::Core.IO, asys::AssemblySystem)
     cap = isfinite(asys.maxsize) ? ", maxsize=$(Int(asys.maxsize))" : ""
-    cut = asys.status == MaxDepthReached ? ", truncated" : ""
+    cut = asys.status == MaxSizeReached ? ", truncated" : ""
     return print(io, "AssemblySystem[n=$(nspecies(asys)), k=$(nbonds(asys))$cap$cut]")
 end
 
@@ -54,13 +54,13 @@ _embeddim(asys::AssemblySystem) = _embeddim(asys.entropymodel, asys.bindingrules
 Whether `asys` covers every structure its rules allow, i.e. whether `maxsize` cut the enumeration short.
 `missing` if nothing has been enumerated yet.
 """
-iscomplete(asys::AssemblySystem) = asys.status === nothing ? missing : asys.status == Finished
+iscomplete(asys::AssemblySystem) = asys.status === nothing ? missing : asys.status == Complete
 
 _iscached(asys::AssemblySystem, kw) = kw.maxsize == asys.maxsize && length(kw) == 1
 
 # raise a warning if the enumeration is truncated a a given size
 function _warnifincomplete(asys::AssemblySystem)
-    (asys.verbose && asys.status != Finished) || return nothing
+    (asys.verbose && asys.status != Complete) || return nothing
     cap = isfinite(asys.maxsize) ? Int(asys.maxsize) : asys.maxsize
     @warn "AssemblySystem enumeration stopped at $(asys.status) with maxsize=$cap, so these are " *
           "not all the structures the rules allow. Everything computed from them is a truncation; " *
@@ -156,7 +156,7 @@ Returns a `StructureCount`, exact when the enumeration fits in `exact_budget` an
 otherwise — as opposed to [`nstructures`](@ref), which returns the plain number of structures actually
 enumerated and pays for the enumeration to do it.
 """
-countstructures(asys::AssemblySystem; kwargs...) = Roly.countpolyforms(asys.bindingrules; kwargs...)
+countstructures(asys::AssemblySystem; kwargs...) = polycount(asys.bindingrules; kwargs...)
 
 """
     partitionfunctions(asys::AssemblySystem; enum_kwargs...)
