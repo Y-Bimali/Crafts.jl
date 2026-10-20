@@ -2,7 +2,7 @@
     lineardesign(M, idxs; optimizer, kwargs...)
     lineardesign(asys::AssemblySystem, idxs; optimizer, kwargs...)
 
-Find parameters that make the target structures `idxs` the only ones at zero excess free energy.
+Find parameters `ξ` that make the target structures `idxs` the only ones at zero excess free energy.
 
   - `idxs`: index or indices of the target structures
   - `optimizer`: any `MathOptInterface` optimizer, e.g. `Clarabel.Optimizer`. Configure solver
@@ -14,7 +14,8 @@ Find parameters that make the target structures `idxs` the only ones at zero exc
   - `silent = true`: suppress solver output
   - `infval = 100`: finite stand-in for infinite parameters
 
-Returns `(ξ, residual)`. Requires `Convex` to be loaded.
+Returns `(ξ, residual)`, where `residual` is the largest excess free energy left among the
+non-targets. Requires `Convex` to be loaded.
 """
 function lineardesign end
 
