@@ -28,9 +28,25 @@ const TETROMINOES = Dict(
     "Z" => [1 1 0; 0 1 1]
 )
 
+const PENTOMINOES = Dict( # Conway naming; "P1" is oriented like the letter P, "P2" is its mirror image
+    "O" => [1 1 1 1 1],
+    "P1" => [1 1; 1 1; 1 0], "P2" => [1 1; 1 1; 0 1],
+    "Q1" => [1 0; 1 0; 1 0; 1 1], "Q2" => [0 1; 0 1; 0 1; 1 1], # Q1 is Golomb's L
+    "R1" => [0 1 1; 1 1 0; 0 1 0], "R2" => [1 1 0; 0 1 1; 0 1 0], # R1 is the Game of Life R-pentomino
+    "S1" => [0 0 1 1; 1 1 1 0], "S2" => [1 1 0 0; 0 1 1 1],
+    "T" => [1 1 1; 0 1 0; 0 1 0],
+    "U" => [1 0 1; 1 1 1],
+    "V" => [1 0 0; 1 0 0; 1 1 1],
+    "W" => [1 0 0; 1 1 0; 0 1 1],
+    "X" => [0 1 0; 1 1 1; 0 1 0],
+    "Y1" => [0 1; 1 1; 0 1; 0 1], "Y2" => [1 0; 1 1; 1 0; 1 0], # Y1 has its arm on the left
+    "Z1" => [1 1 0; 0 1 0; 0 1 1], "Z2" => [0 1 1; 0 1 0; 1 1 0]
+)
+
 const SQMATS = Dict(
     "digits" => DIGITS,
-    "tetrominoes" => TETROMINOES
+    "tetrominoes" => TETROMINOES,
+    "pentominoes" => PENTOMINOES
 )
 
 # ---------- Triangles
