@@ -13,4 +13,5 @@ using Convex, Clarabel
     include("rates.jl")
     include("design.jl")
     include("bindingruledesign.jl")
+    include("vertexmergedform.jl")
 end

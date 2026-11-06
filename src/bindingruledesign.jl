@@ -1,7 +1,9 @@
 ### Design of the binding rules themselves, as opposed to `design.jl`, which takes the rules as given
 ### and designs the thermodynamic parameters. A design here is a `BindingRules`. The search starts
 ### from the fully addressable design, in which every site of the target carries its own color, and
-### repeatedly merges pairs of species, which only ever adds structures.
+### repeatedly merges pairs of species. A merge keeps every bond either species had, so whatever could
+### assemble before still can, but structures that differed only in the merged species become one, so
+### the number of distinct structures can go down as well as up.
 
 """
     fully_addressable_design(target::Polyform, particlespecies::AbstractVector{<:ParticleSpecies})

@@ -1,0 +1,15 @@
+[deps]
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+Clarabel = "61c947e1-3e6d-4ee4-985a-eec8c727bd6e"
+Convex = "f65535da-76fb-5f13-bab9-19810c17039a"
+Crafts = "b2ff1c92-5c3b-499f-8ce1-93fd6946a36f"
+GLMakie = "e9467ef8-e4e7-5192-8a1a-b1aee30e663a"
+Graphs = "86223c79-3864-5bf0-83f7-82e725a168b6"
+JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
+Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
+ProfileView = "c46f51b8-102a-5cf2-8d2c-8597cb0e0da7"
+Roly = "1621a601-f9d4-49dc-b032-1328811fec3a"
+
+[sources]
+Crafts = {path = ".."}
+Roly = {rev = "v0.3.0", url = "https://github.com/goodrichgroup/Roly.jl.git"}

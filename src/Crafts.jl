@@ -37,5 +37,6 @@ include("rates.jl")
 include("stability.jl")
 include("design.jl")
 include("bindingruledesign.jl")
+include("vertexmergedform.jl")
 
 end # module Crafts
